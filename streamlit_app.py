@@ -171,6 +171,7 @@ if st.button("Calculate XAUUSD and XAGUSD forecasts", type="secondary", use_cont
                     "rows": rows,
                     "latest": str(fetched.frame.index[-1].date()),
                     "provider": fetched.snapshot.provider,
+                    "scorecards": build_scorecards(ledger.outcomes()),
                 }
             st.session_state["metal_results"] = metal_results
             st.success("Gold and silver forecasts calculated.")
@@ -197,3 +198,8 @@ for asset, result in metal_results.items():
     for column in ("Forecast low", "Forecast close", "Forecast high"):
         metal_table[column] = metal_table[column].round(2)
     st.dataframe(metal_table, use_container_width=True, hide_index=True)
+    if result["scorecards"]:
+        st.caption("Range coverage is the percentage of completed sessions whose actual low and high stayed inside the forecast range.")
+        st.dataframe(result["scorecards"], use_container_width=True, hide_index=True)
+    else:
+        st.info("Metals scorecards will populate after the forecast target sessions complete.")
