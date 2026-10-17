@@ -23,6 +23,7 @@ def generate_rolling_forecasts(
     model_names: Iterable[str] | None = None,
     ledger: ForecastLedger | None = None,
     min_rows: int = 100,
+    asset: str = "UNG",
 ) -> list[dict]:
     """Generate one independent forecast per model and future session."""
     ung = ung.sort_index()
@@ -44,7 +45,7 @@ def generate_rolling_forecasts(
             )
             identity = f"{latest_session.date()}|{target_session}|{model_name}|{horizon}"
             record = {
-                "forecast_id": "UNG-" + hashlib.sha256(identity.encode()).hexdigest()[:20],
+                "forecast_id": asset.upper() + "-" + hashlib.sha256(identity.encode()).hexdigest()[:20],
                 "issued_at": issued_at,
                 "origin_session": latest_session.date().isoformat(),
                 "target_session": forecast.target_session,

@@ -37,3 +37,20 @@ $env:PYTHONPATH = "src"
 pytest -q
 python run_forecast.py
 ```
+
+## Gold and silver research forecasts
+
+The local metals pipeline supports XAUUSD and XAGUSD using free Yahoo COMEX
+continuous-futures proxies (`GC=F` and `SI=F`). These are research proxies,
+not executable broker spot prices; validate the final model against the broker
+feed before trading.
+
+```powershell
+$env:PYTHONPATH = "src"
+python run_metals_forecast.py
+```
+
+The daily default runs HistGradientBoosting (nonlinear champion) and Ridge
+(transparent benchmark). Random Forest and Extra Trees remain available from
+the Streamlit model selector for periodic challenger audits. Metals ledgers are
+stored separately under `data/ledger/xauusd/` and `data/ledger/xagusd/`.

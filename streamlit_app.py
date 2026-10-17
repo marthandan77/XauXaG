@@ -9,6 +9,7 @@ import streamlit as st
 
 from ung_forecast.ledger import ForecastLedger
 from ung_forecast.context_data import combine_context_sources, fetch_cftc_positioning, fetch_eia_storage
+from ung_forecast.metals_providers import fetch_xagusd, fetch_xauusd
 from ung_forecast.providers import compare_sources, fetch_nasdaq_ung, fetch_yahoo_ung
 from ung_forecast.rolling import generate_rolling_forecasts
 from ung_forecast.scorecards import build_scorecards
@@ -143,3 +144,56 @@ if forecasts:
 
 st.subheader("Planned output")
 st.write("Each run displays separate forecasts for each model and horizon; no model is hidden behind an ensemble.")
+
+st.divider()
+st.header("Gold and silver research forecasts")
+st.caption("Free public research feed: Yahoo COMEX futures proxy (GC=F/SI=F). Validate against your broker's spot feed before trading.")
+metal_models = st.multiselect(
+    "Metals models",
+    ["hist_gradient_boosting", "ridge", "random_forest", "extra_trees"],
+    default=["hist_gradient_boosting", "ridge"],
+    key="metal_models",
+    help="HistGradientBoosting is the nonlinear champion; Ridge is the transparent benchmark.",
+)
+if st.button("Calculate XAUUSD and XAGUSD forecasts", type="secondary", use_container_width=True):
+    with st.spinner("Fetching gold and silver history and calculating five-session ranges..."):
+        try:
+            metal_results = {}
+            for asset, fetcher in (("xauusd", fetch_xauusd), ("xagusd", fetch_xagusd)):
+                fetched = fetcher()
+                ledger = ForecastLedger(Path("data/ledger") / asset)
+                rows = generate_rolling_forecasts(
+                    fetched.frame, model_names=metal_models or ("hist_gradient_boosting",),
+                    ledger=ledger, asset=asset, min_rows=100,
+                )
+                ledger.score_matured(fetched.frame)
+                metal_results[asset] = {
+                    "rows": rows,
+                    "latest": str(fetched.frame.index[-1].date()),
+                    "provider": fetched.snapshot.provider,
+                }
+            st.session_state["metal_results"] = metal_results
+            st.success("Gold and silver forecasts calculated.")
+        except Exception as exc:
+            st.error(f"Metals forecast blocked: {type(exc).__name__}: {exc}")
+
+metal_results = st.session_state.get("metal_results", {})
+for asset, result in metal_results.items():
+    st.subheader(asset.upper())
+    st.caption(f"Latest completed session: {result['latest']} | Feed: {result['provider']}")
+    rows = result["rows"]
+    if not rows:
+        st.info("No forecast rows available.")
+        continue
+    metal_table = pd.DataFrame(rows)[[
+        "target_session", "model_name", "horizon", "predicted_low", "expected_close",
+        "predicted_high", "probability_up",
+    ]].rename(columns={
+        "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
+        "predicted_low": "Forecast low", "expected_close": "Forecast close",
+        "predicted_high": "Forecast high", "probability_up": "Up probability",
+    })
+    metal_table["Up probability"] = (metal_table["Up probability"] * 100).round(0).astype(str) + "%"
+    for column in ("Forecast low", "Forecast close", "Forecast high"):
+        metal_table[column] = metal_table[column].round(2)
+    st.dataframe(metal_table, use_container_width=True, hide_index=True)
