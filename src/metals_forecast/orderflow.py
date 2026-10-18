@@ -1,6 +1,7 @@
-"""Public Binance USD-M metals perpetual depth and aggregate trade data."""
+"""Public Bybit metals perpetual depth and aggregate trade data."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -12,10 +13,9 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 
-BASE_URL = "https://fapi.binance.com"
-ARCHIVE_URL = "https://data.binance.vision/data/futures/um"
+BASE_URL = "https://api.bybit.com"
 SYMBOLS = {"XAUUSDT": "Gold", "XAGUSDT": "Silver"}
-DEFAULT_DB = Path("data/binance/orderflow.sqlite3")
+DEFAULT_DB = Path("data/bybit/orderflow.sqlite3")
 
 
 def _get(path: str, params: dict[str, str | int]) -> list | dict:
@@ -25,39 +25,31 @@ def _get(path: str, params: dict[str, str | int]) -> list | dict:
         with urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Binance market data request failed: {exc}") from exc
-    if isinstance(payload, dict) and "code" in payload and payload.get("code", 0) != 0:
-        raise RuntimeError(f"Binance API error {payload['code']}: {payload.get('msg', 'unknown error')}")
+        raise RuntimeError(f"Bybit market data request failed: {exc}") from exc
+    if isinstance(payload, dict) and "retCode" in payload and payload.get("retCode", 0) != 0:
+        raise RuntimeError(f"Bybit API error {payload['retCode']}: {payload.get('retMsg', 'unknown error')}")
     return payload
 
 
-def _stored_trade_cursor(symbol: str, db_path: str | Path = DEFAULT_DB) -> tuple[int, int] | None:
-    path = Path(db_path)
-    if not path.exists():
-        return None
-    try:
-        with sqlite3.connect(path) as connection:
-            row = connection.execute(
-                "SELECT trade_id, trade_time_ms FROM aggregate_trades "
-                "WHERE symbol=? ORDER BY trade_id DESC LIMIT 1", (symbol,)
-            ).fetchone()
-    except sqlite3.OperationalError:
-        return None
-    return (int(row[0]), int(row[1])) if row else None
-
-
 def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 1000) -> dict:
-    """Fetch one public order book snapshot and the latest aggregate trades."""
+    """Fetch one public Bybit order book snapshot and recent trades."""
     key = symbol.upper()
     if key not in SYMBOLS:
-        raise ValueError(f"Unsupported Binance metals symbol: {symbol}")
-    depth = _get("/fapi/v1/depth", {"symbol": key, "limit": depth_limit})
-    trades = _get("/fapi/v1/aggTrades", {"symbol": key, "limit": trade_limit})
+        raise ValueError(f"Unsupported Bybit metals symbol: {symbol}")
+    depth_payload = _get("/v5/market/orderbook", {
+        "category": "linear", "symbol": key, "limit": depth_limit,
+    })
+    trade_payload = _get("/v5/market/recent-trade", {
+        "category": "linear", "symbol": key, "limit": trade_limit,
+    })
+    depth = depth_payload.get("result") if isinstance(depth_payload, dict) else None
+    trade_result = trade_payload.get("result") if isinstance(trade_payload, dict) else None
+    trades = trade_result.get("list") if isinstance(trade_result, dict) else None
     if not isinstance(depth, dict) or not isinstance(trades, list):
-        raise RuntimeError(f"Unexpected Binance response for {key}")
+        raise RuntimeError(f"Unexpected Bybit response for {key}")
 
-    bids = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["bids"]]
-    asks = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["asks"]]
+    bids = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["b"]]
+    asks = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["a"]]
     best_bid = bids[0]["Price"] if bids else 0.0
     best_ask = asks[0]["Price"] if asks else 0.0
     mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0.0
@@ -71,57 +63,38 @@ def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 100
         band_depths[f"ask_depth_{label}"] = ask_band
         band_depths[f"imbalance_{label}"] = (bid_band - ask_band) / denominator if denominator else 0.0
     buy_qty = sell_qty = buy_quote = sell_quote = 0.0
+    normalized_trades = []
     for trade in trades:
-        quantity = float(trade["q"])
-        quote = float(trade["p"]) * quantity
-        # Binance m=true means the buyer was maker, so the sell was aggressive.
-        if trade["m"]:
+        quantity = float(trade["size"])
+        price = float(trade["price"])
+        quote = price * quantity
+        sell_aggressor = trade["side"].lower() == "sell"
+        if sell_aggressor:
             sell_qty += quantity
             sell_quote += quote
         else:
             buy_qty += quantity
             buy_quote += quote
-
-    archive_trades = list(trades)
-    cursor = _stored_trade_cursor(key)
-    if cursor and trades:
-        last_id, last_time = cursor
-        oldest_recent_id = int(trades[0]["a"])
-        latest_id = int(trades[-1]["a"])
-        recent_enough = int(datetime.now(timezone.utc).timestamp() * 1000) - last_time < 48 * 60 * 60 * 1000
-        next_id = last_id + 1
-        pages = 0
-        if recent_enough and next_id < oldest_recent_id:
-            archive_trades = []
-            while next_id < oldest_recent_id and next_id <= latest_id and pages < 5:
-                missing = _get("/fapi/v1/aggTrades", {"symbol": key, "fromId": next_id, "limit": 1000})
-                if not isinstance(missing, list) or not missing:
-                    break
-                archive_trades.extend(missing)
-                next_id = int(missing[-1]["a"]) + 1
-                pages += 1
-            if next_id >= oldest_recent_id:
-                archive_trades.extend(trades)
-    archived_normalized = [
-        {
-            "id": int(trade["a"]),
-            "timestamp": int(trade["T"]),
-            "price": float(trade["p"]),
-            "quantity": float(trade["q"]),
-            "buyer_is_maker": bool(trade["m"]),
-        }
-        for trade in archive_trades
-    ]
+        trade_key = str(trade.get("execId") or f"{trade['time']}:{trade['price']}:{trade['size']}:{trade['side']}")
+        digest = hashlib.blake2b(trade_key.encode("utf-8"), digest_size=8).digest()
+        normalized_trades.append({
+            "id": int.from_bytes(digest, "big") & ((1 << 63) - 1),
+            "timestamp": int(trade["time"]),
+            "price": price,
+            "quantity": quantity,
+            "buyer_is_maker": sell_aggressor,
+        })
 
     return {
         "symbol": key,
         "name": SYMBOLS[key],
+        "source": "Bybit",
         "bids": bids,
         "asks": asks,
         "depth_bands": band_depths,
         "updated_at": datetime.now(timezone.utc),
-        "trade_count": len(trades),
-        "trades": archived_normalized,
+        "trade_count": len(normalized_trades),
+        "trades": normalized_trades,
         "buy_qty": buy_qty,
         "sell_qty": sell_qty,
         "buy_quote": buy_quote,
@@ -162,9 +135,20 @@ def record_orderflow(data: dict, db_path: str | Path = DEFAULT_DB) -> None:
         band_depths[f"ask_depth_{label}"] = ask_band
         band_depths[f"imbalance_{label}"] = (bid_band - ask_band) / denominator if denominator else 0.0
 
-    cursor = _stored_trade_cursor(data["symbol"], path)
-    last_id = cursor[0] if cursor else -1
-    new_trades = [trade for trade in data["trades"] if int(trade["id"]) > last_id]
+    trade_ids = [int(trade["id"]) for trade in data["trades"]]
+    existing_ids: set[int] = set()
+    with sqlite3.connect(path) as connection:
+        for offset in range(0, len(trade_ids), 500):
+            batch = trade_ids[offset:offset + 500]
+            if not batch:
+                continue
+            placeholders = ",".join("?" for _ in batch)
+            rows = connection.execute(
+                f"SELECT trade_id FROM aggregate_trades WHERE symbol=? AND trade_id IN ({placeholders})",
+                [data["symbol"], *batch],
+            ).fetchall()
+            existing_ids.update(int(row[0]) for row in rows)
+    new_trades = [trade for trade in data["trades"] if int(trade["id"]) not in existing_ids]
     daily_updates: dict[str, dict[str, float | int]] = {}
     for trade in new_trades:
         session = datetime.fromtimestamp(trade["timestamp"] / 1000, tz=timezone.utc).date().isoformat()
@@ -297,28 +281,6 @@ def record_orderflow(data: dict, db_path: str | Path = DEFAULT_DB) -> None:
         connection.execute("DELETE FROM aggregate_trades WHERE trade_time_ms < ?", (cutoff_ms,))
 
 
-def store_daily_archive_features(
-    symbol: str, session: str, features: dict[str, float | int], db_path: str | Path = DEFAULT_DB
-) -> None:
-    """Save a complete daily feature row derived from Binance historical archives."""
-    path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as connection:
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS daily_archive_features (
-                symbol TEXT NOT NULL,
-                session TEXT NOT NULL,
-                features_json TEXT NOT NULL,
-                PRIMARY KEY (symbol, session)
-            )
-        """)
-        connection.execute("""
-            INSERT INTO daily_archive_features (symbol, session, features_json)
-            VALUES (?, ?, ?)
-            ON CONFLICT(symbol, session) DO UPDATE SET features_json=excluded.features_json
-        """, (symbol, session, json.dumps(features, sort_keys=True)))
-
-
 def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str, pd.DataFrame]:
     """Return UTC-day CVD/trade and DOM summary features for both metals."""
     path = Path(db_path)
@@ -335,7 +297,6 @@ def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str,
         trades = read_table(connection, "aggregate_trades")
         depth = read_table(connection, "depth_snapshots")
         live_features = read_table(connection, "live_daily_features")
-        archives = read_table(connection, "daily_archive_features")
     result = {}
     for symbol, asset in (("XAUUSDT", "xauusd"), ("XAGUSDT", "xagusd")):
         symbol_live = live_features.loc[live_features["symbol"] == symbol].copy() if not live_features.empty else pd.DataFrame()
@@ -399,13 +360,6 @@ def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str,
             dom = pd.DataFrame()
 
         daily = flow.join(dom, how="outer") if not flow.empty or not dom.empty else pd.DataFrame()
-        archive = archives.loc[archives["symbol"] == symbol].copy() if not archives.empty else pd.DataFrame()
-        if not archive.empty:
-            parsed = [json.loads(raw) for raw in archive["features_json"]]
-            archive_daily = pd.DataFrame(parsed, index=pd.to_datetime(archive["session"]))
-            archive_daily.index.name = "session"
-            # Prefer complete archived days; live polling fills dates without archive data.
-            daily = archive_daily.combine_first(daily) if not daily.empty else archive_daily
         if not daily.empty:
             daily.index = pd.DatetimeIndex(daily.index, name="session")
             daily["available_at"] = daily.index + pd.Timedelta(days=1)

@@ -6,5 +6,5 @@ __pycache__/
 data/raw/
 data/normalized/
 data/dukascopy/
-data/binance/
+data/bybit/
 .streamlit/secrets.toml

@@ -1,13 +1,12 @@
 ﻿from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 
 from metals_forecast.ledger import ForecastLedger
-from metals_forecast.binance_orderflow import (
+from metals_forecast.orderflow import (
     fetch_orderflow,
     load_daily_orderflow_features,
     record_orderflow,
@@ -15,14 +14,13 @@ from metals_forecast.binance_orderflow import (
 from metals_forecast.metals_providers import fetch_xagusd, fetch_xauusd
 from metals_forecast.rolling import generate_rolling_forecasts
 from metals_forecast.scorecards import build_scorecards
-from backfill_binance_history import backfill as backfill_binance_history
 
 st.set_page_config(page_title="Metals Forecast", page_icon="📈", layout="wide")
 st.title("Gold and Silver Rolling Forecast")
-st.caption("Five-session research forecasts and live Binance order flow. Research only.")
+st.caption("Five-session research forecasts and live Bybit order flow. Research only.")
 st.info(
     "Refreshes completed daily XAUUSD/XAGUSD bars from Dukascopy's public historical feed. "
-    "Live DOM and signed trade volume come from Binance XAUUSDT/XAGUSDT perpetual markets. "
+    "Live DOM and signed trade volume come from Bybit XAUUSDT/XAGUSDT linear perpetual markets. "
     "Both feeds are public and need no API key. Prices and order flow can differ from your broker's feed."
 )
 models = st.multiselect(
@@ -34,13 +32,7 @@ models = st.multiselect(
 
 if st.button("Calculate latest forecast", type="primary", use_container_width=True):
     try:
-        with st.spinner("Syncing available Binance history (initial sync may take a few minutes)..."):
-            try:
-                backfill_binance_history(datetime.now(timezone.utc).date() - timedelta(days=1))
-            except Exception as exc:
-                st.warning(f"Binance archive sync failed; continuing with saved data: {type(exc).__name__}: {exc}")
-
-        with st.spinner("Refreshing current Binance CVD and market depth..."):
+        with st.spinner("Refreshing current Bybit CVD and market depth..."):
             for symbol in ("XAUUSDT", "XAGUSDT"):
                 try:
                     live_flow = fetch_orderflow(symbol)
@@ -83,7 +75,7 @@ for asset, result in st.session_state.get("results", {}).items():
             "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
             "predicted_low": "Forecast low", "expected_close": "Forecast close",
             "predicted_high": "Forecast high", "probability_up": "Up probability",
-            "orderflow_features_enabled": "Binance flow used",
+            "orderflow_features_enabled": "Bybit flow used",
             "orderflow_rows_used": "Flow history days",
         }
         table = pd.DataFrame(rows)[list(columns)].rename(columns=columns)
@@ -92,7 +84,7 @@ for asset, result in st.session_state.get("results", {}).items():
             table[column] = table[column].round(2)
         st.dataframe(table, use_container_width=True, hide_index=True)
         st.caption(
-            "Binance flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
+            "Bybit flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
             "until then forecasts use price-history features."
         )
     else:
@@ -104,10 +96,10 @@ for asset, result in st.session_state.get("results", {}).items():
         st.info("Scorecards will populate after target sessions complete.")
 
 
-st.header("Live Binance market depth and order flow")
+st.header("Live Bybit market depth and order flow")
 st.caption(
-    "Venue-specific Binance perpetual data, not a consolidated gold/silver book. CVD is calculated "
-    "from the latest 1,000 aggregate trades returned by Binance; it resets to that rolling sample "
+    "Venue-specific Bybit perpetual data, not a consolidated gold/silver book. CVD is calculated "
+    "from the latest 1,000 public trades returned by Bybit; it resets to that rolling sample "
     "on each refresh. Quantities are contract units."
 )
 refresh_choice = st.selectbox("Refresh interval", ["Manual", "5 seconds", "15 seconds", "30 seconds"])
@@ -115,23 +107,23 @@ refresh_interval = {"Manual": None, "5 seconds": "5s", "15 seconds": "15s", "30 
 
 
 @st.fragment(run_every=refresh_interval)
-def show_binance_orderflow() -> None:
-    st.button("Refresh Binance DOM and CVD", key="refresh_binance_orderflow")
-    with st.spinner("Loading Binance depth and trades..."):
+def show_bybit_orderflow() -> None:
+    st.button("Refresh Bybit DOM and CVD", key="refresh_bybit_orderflow")
+    with st.spinner("Loading Bybit depth and trades..."):
         try:
             current = {}
             for symbol in ("XAUUSDT", "XAGUSDT"):
                 current[symbol] = fetch_orderflow(symbol)
                 record_orderflow(current[symbol])
-            st.session_state["binance_orderflow"] = current
+            st.session_state["bybit_orderflow"] = current
         except Exception as exc:
-            st.error(f"Binance data unavailable: {type(exc).__name__}: {exc}")
+            st.error(f"Bybit data unavailable: {type(exc).__name__}: {exc}")
             return
 
     gold, silver = st.tabs(["Gold · XAUUSDT", "Silver · XAGUSDT"])
     for tab, symbol in ((gold, "XAUUSDT"), (silver, "XAGUSDT")):
         with tab:
-            data = st.session_state["binance_orderflow"][symbol]
+            data = st.session_state["bybit_orderflow"][symbol]
             best_bid = data["bids"][0]["Price"] if data["bids"] else 0
             best_ask = data["asks"][0]["Price"] if data["asks"] else 0
             spread = best_ask - best_bid if best_bid and best_ask else 0
@@ -166,4 +158,4 @@ def show_binance_orderflow() -> None:
             )
 
 
-show_binance_orderflow()
+show_bybit_orderflow()

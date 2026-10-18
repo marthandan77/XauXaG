@@ -1,10 +1,10 @@
-"""Continuously archive public Binance metals trades and depth snapshots."""
+"""Continuously archive public Bybit metals trades and depth snapshots."""
 from __future__ import annotations
 
 import argparse
 import time
 
-from metals_forecast.binance_orderflow import fetch_orderflow, record_orderflow
+from metals_forecast.orderflow import fetch_orderflow, record_orderflow
 
 
 def main() -> None:
@@ -14,7 +14,7 @@ def main() -> None:
     if args.interval < 5:
         parser.error("--interval must be at least five seconds to stay within public API rate limits")
 
-    print("Collecting public Binance XAUUSDT and XAGUSDT flow data. Press Ctrl+C to stop.")
+    print("Collecting public Bybit XAUUSDT and XAGUSDT flow data. Press Ctrl+C to stop.")
     while True:
         started = time.monotonic()
         for symbol in ("XAUUSDT", "XAGUSDT"):

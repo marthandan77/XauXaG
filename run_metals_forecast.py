@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from metals_forecast.binance_orderflow import load_daily_orderflow_features
+from metals_forecast.orderflow import load_daily_orderflow_features
 from metals_forecast.ledger import ForecastLedger
 from metals_forecast.metals_providers import fetch_xagusd, fetch_xauusd
 from metals_forecast.rolling import generate_rolling_forecasts
