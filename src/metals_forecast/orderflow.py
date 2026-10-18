@@ -1,4 +1,4 @@
-"""Public Bybit metals perpetual depth and aggregate trade data."""
+"""Public OKX metals perpetual depth and aggregate trade data."""
 from __future__ import annotations
 
 import hashlib
@@ -13,9 +13,10 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 
-BASE_URL = "https://api.bybit.com"
+BASE_URL = "https://www.okx.com"
 SYMBOLS = {"XAUUSDT": "Gold", "XAGUSDT": "Silver"}
-DEFAULT_DB = Path("data/bybit/orderflow.sqlite3")
+INSTRUMENTS = {"XAUUSDT": "XAU-USDT-SWAP", "XAGUSDT": "XAG-USDT-SWAP"}
+DEFAULT_DB = Path("data/okx/orderflow.sqlite3")
 
 
 def _get(path: str, params: dict[str, str | int]) -> list | dict:
@@ -25,31 +26,28 @@ def _get(path: str, params: dict[str, str | int]) -> list | dict:
         with urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Bybit market data request failed: {exc}") from exc
-    if isinstance(payload, dict) and "retCode" in payload and payload.get("retCode", 0) != 0:
-        raise RuntimeError(f"Bybit API error {payload['retCode']}: {payload.get('retMsg', 'unknown error')}")
+        raise RuntimeError(f"OKX market data request failed: {exc}") from exc
+    if isinstance(payload, dict) and "code" in payload and payload.get("code", "0") != "0":
+        raise RuntimeError(f"OKX API error {payload['code']}: {payload.get('msg', 'unknown error')}")
     return payload
 
 
-def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 1000) -> dict:
-    """Fetch one public Bybit order book snapshot and recent trades."""
+def fetch_orderflow(symbol: str, depth_limit: int = 400, trade_limit: int = 500) -> dict:
+    """Fetch one public OKX order book snapshot and recent trades."""
     key = symbol.upper()
     if key not in SYMBOLS:
-        raise ValueError(f"Unsupported Bybit metals symbol: {symbol}")
-    depth_payload = _get("/v5/market/orderbook", {
-        "category": "linear", "symbol": key, "limit": depth_limit,
-    })
-    trade_payload = _get("/v5/market/recent-trade", {
-        "category": "linear", "symbol": key, "limit": trade_limit,
-    })
-    depth = depth_payload.get("result") if isinstance(depth_payload, dict) else None
-    trade_result = trade_payload.get("result") if isinstance(trade_payload, dict) else None
-    trades = trade_result.get("list") if isinstance(trade_result, dict) else None
+        raise ValueError(f"Unsupported OKX metals symbol: {symbol}")
+    instrument = INSTRUMENTS[key]
+    depth_payload = _get("/api/v5/market/books", {"instId": instrument, "sz": depth_limit})
+    trade_payload = _get("/api/v5/market/trades", {"instId": instrument, "limit": trade_limit})
+    depth_rows = depth_payload.get("data") if isinstance(depth_payload, dict) else None
+    trades = trade_payload.get("data") if isinstance(trade_payload, dict) else None
+    depth = depth_rows[0] if isinstance(depth_rows, list) and depth_rows else None
     if not isinstance(depth, dict) or not isinstance(trades, list):
-        raise RuntimeError(f"Unexpected Bybit response for {key}")
+        raise RuntimeError(f"Unexpected OKX response for {instrument}")
 
-    bids = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["b"]]
-    asks = [{"Price": float(price), "Quantity": float(qty)} for price, qty in depth["a"]]
+    bids = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth["bids"]]
+    asks = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth["asks"]]
     best_bid = bids[0]["Price"] if bids else 0.0
     best_ask = asks[0]["Price"] if asks else 0.0
     mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0.0
@@ -65,8 +63,8 @@ def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 100
     buy_qty = sell_qty = buy_quote = sell_quote = 0.0
     normalized_trades = []
     for trade in trades:
-        quantity = float(trade["size"])
-        price = float(trade["price"])
+        quantity = float(trade["sz"])
+        price = float(trade["px"])
         quote = price * quantity
         sell_aggressor = trade["side"].lower() == "sell"
         if sell_aggressor:
@@ -75,11 +73,11 @@ def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 100
         else:
             buy_qty += quantity
             buy_quote += quote
-        trade_key = str(trade.get("execId") or f"{trade['time']}:{trade['price']}:{trade['size']}:{trade['side']}")
+        trade_key = str(trade.get("tradeId") or f"{trade['ts']}:{trade['px']}:{trade['sz']}:{trade['side']}")
         digest = hashlib.blake2b(trade_key.encode("utf-8"), digest_size=8).digest()
         normalized_trades.append({
             "id": int.from_bytes(digest, "big") & ((1 << 63) - 1),
-            "timestamp": int(trade["time"]),
+            "timestamp": int(trade["ts"]),
             "price": price,
             "quantity": quantity,
             "buyer_is_maker": sell_aggressor,
@@ -88,7 +86,7 @@ def fetch_orderflow(symbol: str, depth_limit: int = 1000, trade_limit: int = 100
     return {
         "symbol": key,
         "name": SYMBOLS[key],
-        "source": "Bybit",
+        "source": "OKX",
         "bids": bids,
         "asks": asks,
         "depth_bands": band_depths,

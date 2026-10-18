@@ -1,4 +1,4 @@
-"""Continuously archive public Bybit metals trades and depth snapshots."""
+"""Continuously archive public OKX metals trades and depth snapshots."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,7 @@ def main() -> None:
     if args.interval < 5:
         parser.error("--interval must be at least five seconds to stay within public API rate limits")
 
-    print("Collecting public Bybit XAUUSDT and XAGUSDT flow data. Press Ctrl+C to stop.")
+    print("Collecting public OKX XAUUSDT and XAGUSDT flow data. Press Ctrl+C to stop.")
     while True:
         started = time.monotonic()
         for symbol in ("XAUUSDT", "XAGUSDT"):

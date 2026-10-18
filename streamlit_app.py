@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -17,10 +17,10 @@ from metals_forecast.scorecards import build_scorecards
 
 st.set_page_config(page_title="Metals Forecast", page_icon="📈", layout="wide")
 st.title("Gold and Silver Rolling Forecast")
-st.caption("Five-session research forecasts and live Bybit order flow. Research only.")
+st.caption("Five-session research forecasts and live OKX order flow. Research only.")
 st.info(
     "Refreshes completed daily XAUUSD/XAGUSD bars from Dukascopy's public historical feed. "
-    "Live DOM and signed trade volume come from Bybit XAUUSDT/XAGUSDT linear perpetual markets. "
+    "Live DOM and signed trade volume come from OKX XAUUSDT/XAGUSDT linear perpetual markets. "
     "Both feeds are public and need no API key. Prices and order flow can differ from your broker's feed."
 )
 models = st.multiselect(
@@ -32,7 +32,7 @@ models = st.multiselect(
 
 if st.button("Calculate latest forecast", type="primary", use_container_width=True):
     try:
-        with st.spinner("Refreshing current Bybit CVD and market depth..."):
+        with st.spinner("Refreshing current OKX CVD and market depth..."):
             for symbol in ("XAUUSDT", "XAGUSDT"):
                 try:
                     live_flow = fetch_orderflow(symbol)
@@ -75,7 +75,7 @@ for asset, result in st.session_state.get("results", {}).items():
             "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
             "predicted_low": "Forecast low", "expected_close": "Forecast close",
             "predicted_high": "Forecast high", "probability_up": "Up probability",
-            "orderflow_features_enabled": "Bybit flow used",
+            "orderflow_features_enabled": "OKX flow used",
             "orderflow_rows_used": "Flow history days",
         }
         table = pd.DataFrame(rows)[list(columns)].rename(columns=columns)
@@ -84,7 +84,7 @@ for asset, result in st.session_state.get("results", {}).items():
             table[column] = table[column].round(2)
         st.dataframe(table, use_container_width=True, hide_index=True)
         st.caption(
-            "Bybit flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
+            "OKX flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
             "until then forecasts use price-history features."
         )
     else:
@@ -96,10 +96,10 @@ for asset, result in st.session_state.get("results", {}).items():
         st.info("Scorecards will populate after target sessions complete.")
 
 
-st.header("Live Bybit market depth and order flow")
+st.header("Live OKX market depth and order flow")
 st.caption(
-    "Venue-specific Bybit perpetual data, not a consolidated gold/silver book. CVD is calculated "
-    "from the latest 1,000 public trades returned by Bybit; it resets to that rolling sample "
+    "Venue-specific OKX perpetual data, not a consolidated gold/silver book. CVD is calculated "
+    "from the latest 500 public trades returned by OKX; it resets to that rolling sample "
     "on each refresh. Quantities are contract units."
 )
 refresh_choice = st.selectbox("Refresh interval", ["Manual", "5 seconds", "15 seconds", "30 seconds"])
@@ -107,23 +107,23 @@ refresh_interval = {"Manual": None, "5 seconds": "5s", "15 seconds": "15s", "30 
 
 
 @st.fragment(run_every=refresh_interval)
-def show_bybit_orderflow() -> None:
-    st.button("Refresh Bybit DOM and CVD", key="refresh_bybit_orderflow")
-    with st.spinner("Loading Bybit depth and trades..."):
+def show_okx_orderflow() -> None:
+    st.button("Refresh OKX DOM and CVD", key="refresh_okx_orderflow")
+    with st.spinner("Loading OKX depth and trades..."):
         try:
             current = {}
             for symbol in ("XAUUSDT", "XAGUSDT"):
                 current[symbol] = fetch_orderflow(symbol)
                 record_orderflow(current[symbol])
-            st.session_state["bybit_orderflow"] = current
+            st.session_state["okx_orderflow"] = current
         except Exception as exc:
-            st.error(f"Bybit data unavailable: {type(exc).__name__}: {exc}")
+            st.error(f"OKX data unavailable: {type(exc).__name__}: {exc}")
             return
 
     gold, silver = st.tabs(["Gold · XAUUSDT", "Silver · XAGUSDT"])
     for tab, symbol in ((gold, "XAUUSDT"), (silver, "XAGUSDT")):
         with tab:
-            data = st.session_state["bybit_orderflow"][symbol]
+            data = st.session_state["okx_orderflow"][symbol]
             best_bid = data["bids"][0]["Price"] if data["bids"] else 0
             best_ask = data["asks"][0]["Price"] if data["asks"] else 0
             spread = best_ask - best_bid if best_bid and best_ask else 0
@@ -158,4 +158,4 @@ def show_bybit_orderflow() -> None:
             )
 
 
-show_bybit_orderflow()
+show_okx_orderflow()
