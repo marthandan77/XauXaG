@@ -49,6 +49,7 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
             fetched = fetch_paxg_daily()
             asset = "xauusd"
             ledger = ForecastLedger(Path("data/ledger/coinbase") / asset)
+            newly_scored = ledger.score_matured(fetched.frame)
             flow = orderflow_context.get(asset, pd.DataFrame())
             rows = generate_rolling_forecasts(
                 fetched.frame,
@@ -59,13 +60,15 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
                 min_rows=100,
             )
             trade_plan = build_trade_plan(fetched.frame, current_flow, rows)
-            ledger.score_matured(fetched.frame)
+            outcomes = ledger.outcomes()
             st.session_state["results"] = {
                 asset: {
                     "rows": rows,
                     "latest": str(fetched.frame.index[-1].date()),
                     "provider": fetched.snapshot.provider,
-                    "scorecards": build_scorecards(ledger.outcomes()),
+                    "scorecards": build_scorecards(outcomes),
+                    "recent_outcomes": outcomes[-20:],
+                    "newly_scored": newly_scored,
                     "trade_plan": trade_plan,
                 }
             }
@@ -113,10 +116,17 @@ for asset, result in st.session_state.get("results", {}).items():
             "predicted_high": "Forecast high", "probability_up": "Up probability",
             "orderflow_features_enabled": "Coinbase flow used",
             "orderflow_rows_used": "Flow history days",
+            "calibration_status": "Calibration",
+            "calibration_sample_count": "Calibration samples",
+            "close_bias_correction": "Close correction ($)",
+            "low_bound_expansion": "Low range expansion ($)",
+            "high_bound_expansion": "High range expansion ($)",
         }
         table = pd.DataFrame(rows)[list(columns)].rename(columns=columns)
         table["Up probability"] = (table["Up probability"] * 100).round(0).astype(str) + "%"
         for column in ("Forecast low", "Forecast close", "Forecast high"):
+            table[column] = table[column].round(2)
+        for column in ("Close correction ($)", "Low range expansion ($)", "High range expansion ($)"):
             table[column] = table[column].round(2)
         st.dataframe(table, use_container_width=True, hide_index=True)
         st.caption(
@@ -126,8 +136,60 @@ for asset, result in st.session_state.get("results", {}).items():
     else:
         st.info("No forecast rows available.")
     if result["scorecards"]:
-        st.subheader("Model scorecards")
-        st.dataframe(result["scorecards"], use_container_width=True, hide_index=True)
+        st.subheader("Model scoreboard")
+        st.caption(
+            f"{result['newly_scored']} new outcomes scored this run. Models retrain on completed price history; "
+            "after 30 matched outcomes, recent close bias and range misses adjust later forecasts."
+        )
+        cards = pd.DataFrame(result["scorecards"])
+        scoreboard_columns = {
+            "model_name": "Model", "horizon": "Days ahead", "data_mode": "Inputs",
+            "matured_forecasts": "Scored", "mean_abs_close_error": "Close MAE ($)",
+            "direction_accuracy": "Direction accuracy", "range_coverage": "Full-range coverage",
+            "lower_bound_miss_rate": "Low-side misses", "upper_bound_miss_rate": "High-side misses",
+            "recent_20_abs_close_error": "Recent 20 MAE ($)",
+            "recent_20_range_coverage": "Recent 20 coverage",
+        }
+        visible = cards[list(scoreboard_columns)].rename(columns=scoreboard_columns)
+        percentage_columns = (
+            "Direction accuracy", "Full-range coverage", "Low-side misses", "High-side misses",
+            "Recent 20 coverage",
+        )
+        for column in percentage_columns:
+            visible[column] = visible[column].map(
+                lambda value: "—" if pd.isna(value) else f"{value:.0%}"
+            )
+        for column in ("Close MAE ($)", "Recent 20 MAE ($)"):
+            visible[column] = visible[column].round(2)
+        st.dataframe(visible, use_container_width=True, hide_index=True)
+
+        detailed = [
+            row for row in result.get("recent_outcomes", [])
+            if "actual_low" in row and "actual_high" in row
+        ]
+        if detailed:
+            st.markdown("**Recent forecast range vs actual range**")
+            comparison = pd.DataFrame(detailed)
+            comparison["Forecast range"] = comparison.apply(
+                lambda row: f"{row['predicted_low']:,.2f} - {row['predicted_high']:,.2f}", axis=1
+            )
+            comparison["Actual range"] = comparison.apply(
+                lambda row: f"{row['actual_low']:,.2f} - {row['actual_high']:,.2f}", axis=1
+            )
+            comparison = comparison[[
+                "target_session", "model_name", "horizon", "Forecast range", "Actual range",
+                "close_error", "close_diagnosis", "range_miss_diagnosis",
+            ]].rename(columns={
+                "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
+                "close_error": "Close error ($)", "close_diagnosis": "Close diagnosis",
+                "range_miss_diagnosis": "Range diagnosis",
+            })
+            comparison["Close error ($)"] = comparison["Close error ($)"].round(2)
+            st.dataframe(comparison, use_container_width=True, hide_index=True)
+            st.caption(
+                "Positive close error means the forecast was too high; negative means it was too low. "
+                "Low-side and high-side miss rates show which range boundary needs adjustment."
+            )
     else:
         st.info("Scorecards will populate after target sessions complete.")
 

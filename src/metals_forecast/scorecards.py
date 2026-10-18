@@ -24,8 +24,28 @@ def build_scorecards(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "average_range_width": sum(float(r.get("predicted_range_width", 0.0)) for r in sample) / count,
             }
         all_metrics = metrics(rows)
-        recent_20 = metrics(rows[-20:]) if len(rows) >= 20 else {"mean_abs_close_error": None, "range_coverage": None}
-        recent_60 = metrics(rows[-60:]) if len(rows) >= 60 else {"mean_abs_close_error": None, "range_coverage": None}
+        recent_20 = (
+            metrics(rows[-20:])
+            if len(rows) >= 20
+            else {"mean_abs_close_error": None, "range_coverage": None}
+        )
+        recent_60 = (
+            metrics(rows[-60:])
+            if len(rows) >= 60
+            else {"mean_abs_close_error": None, "range_coverage": None}
+        )
+        directional = [r for r in rows if "direction_correct" in r]
+        recent_directional = [r for r in rows[-20:] if "direction_correct" in r]
+        actual_widths = []
+        for row in rows:
+            if "actual_range_width" in row:
+                actual_widths.append(float(row["actual_range_width"]))
+            else:
+                actual_widths.append(
+                    float(row["predicted_range_width"])
+                    + float(row["low_error"])
+                    - float(row["high_error"])
+                )
         result.append({
             "model_name": model_name,
             "horizon": horizon,
@@ -34,11 +54,23 @@ def build_scorecards(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "mean_abs_close_error": all_metrics["mean_abs_close_error"],
             "mean_abs_low_error": sum(abs(float(r["low_error"])) for r in rows) / n,
             "mean_abs_high_error": sum(abs(float(r["high_error"])) for r in rows) / n,
+            "mean_signed_close_error": sum(float(r["close_error"]) for r in rows) / n,
+            "lower_bound_miss_rate": sum(float(r["low_error"]) > 0 for r in rows) / n,
+            "upper_bound_miss_rate": sum(float(r["high_error"]) < 0 for r in rows) / n,
             "range_coverage": all_metrics["range_coverage"],
             "average_range_width": all_metrics["average_range_width"],
+            "average_actual_range_width": sum(actual_widths) / n,
             "close_coverage": sum(bool(r.get("range_contains_close", False)) for r in rows) / n,
+            "direction_accuracy": (
+                sum(bool(r["direction_correct"]) for r in directional) / len(directional)
+                if directional else None
+            ),
             "recent_20_abs_close_error": recent_20["mean_abs_close_error"],
             "recent_20_range_coverage": recent_20["range_coverage"],
+            "recent_20_direction_accuracy": (
+                sum(bool(r["direction_correct"]) for r in recent_directional) / len(recent_directional)
+                if recent_directional else None
+            ),
             "recent_60_abs_close_error": recent_60["mean_abs_close_error"],
             "recent_60_range_coverage": recent_60["range_coverage"],
             "status": "INSUFFICIENT_DATA" if n < 30 else "EVALUATED",

@@ -14,7 +14,9 @@ def test_calibration_waits_for_matured_history() -> None:
 
 def test_calibration_expands_bounds_from_matured_errors() -> None:
     forecast = {"model_name": "ridge", "horizon": 1, "predicted_low": 10.0, "predicted_high": 12.0}
-    result = calibrate_range(forecast, [outcome(-1.0, 2.0)] * 30)
+    # Errors are forecast minus actual: positive low errors and negative high
+    # errors mean the forecast range was too narrow on those sides.
+    result = calibrate_range(forecast, [outcome(1.0, -2.0)] * 30)
     assert result["calibration_status"] == "CALIBRATED"
     assert result["predicted_low"] < 10.0
     assert result["predicted_high"] > 12.0

@@ -115,20 +115,48 @@ def fit_individual_forecast(
     )
 
 
-def score_forecast(forecast: dict, actual_low: float, actual_close: float, actual_high: float) -> dict[str, float | bool]:
+def score_forecast(
+    forecast: dict, actual_low: float, actual_close: float, actual_high: float
+) -> dict[str, float | bool | str]:
     """Score one matured forecast without changing the original forecast record."""
-    low_error = float(forecast["predicted_low"]) - actual_low
-    close_error = float(forecast["expected_close"]) - actual_close
-    high_error = float(forecast["predicted_high"]) - actual_high
-    return {
+    predicted_low = float(forecast["predicted_low"])
+    predicted_close = float(forecast["expected_close"])
+    predicted_high = float(forecast["predicted_high"])
+    low_error = predicted_low - actual_low
+    close_error = predicted_close - actual_close
+    high_error = predicted_high - actual_high
+    result: dict[str, float | bool | str] = {
+        "predicted_low": predicted_low,
+        "predicted_close": predicted_close,
+        "predicted_high": predicted_high,
+        "actual_low": actual_low,
+        "actual_close": actual_close,
+        "actual_high": actual_high,
         "low_error": low_error,
         "close_error": close_error,
         "high_error": high_error,
-        "predicted_range_width": float(forecast["predicted_high"]) - float(forecast["predicted_low"]),
+        "predicted_range_width": predicted_high - predicted_low,
         "actual_range_width": actual_high - actual_low,
-        "range_contains_close": bool(forecast["predicted_low"] <= actual_close <= forecast["predicted_high"]),
-        "range_contains_day": bool(forecast["predicted_low"] <= actual_low and actual_high <= forecast["predicted_high"]),
+        "range_contains_close": bool(predicted_low <= actual_close <= predicted_high),
+        "range_contains_day": bool(predicted_low <= actual_low and actual_high <= predicted_high),
+        "close_diagnosis": "OVERPREDICTED" if close_error > 0 else "UNDERPREDICTED" if close_error < 0 else "EXACT",
     }
+    reference = forecast.get("reference_close")
+    if reference is not None:
+        predicted_direction = predicted_close > float(reference)
+        actual_direction = actual_close > float(reference)
+        result["direction_correct"] = bool(predicted_direction == actual_direction)
+    low_missed = low_error > 0
+    high_missed = high_error < 0
+    if low_missed and high_missed:
+        result["range_miss_diagnosis"] = "TOO_NARROW_BOTH_SIDES"
+    elif low_missed:
+        result["range_miss_diagnosis"] = "LOWER_BOUND_TOO_HIGH"
+    elif high_missed:
+        result["range_miss_diagnosis"] = "UPPER_BOUND_TOO_LOW"
+    else:
+        result["range_miss_diagnosis"] = "RANGE_CONTAINED_DAY"
+    return result
 
 
 def walk_forward_evaluate(

@@ -21,6 +21,7 @@ def main() -> None:
     asset = "xauusd"
     fetched = fetch_paxg_daily()
     ledger = ForecastLedger(Path("data/ledger/coinbase") / asset)
+    scored = ledger.score_matured(fetched.frame)
     flow = orderflow_context.get(asset)
     rows = generate_rolling_forecasts(
         fetched.frame,
@@ -28,7 +29,6 @@ def main() -> None:
         model_names=("hist_gradient_boosting", "ridge"),
         ledger=ledger, asset=asset, min_rows=100,
     )
-    scored = ledger.score_matured(fetched.frame)
     report["assets"][asset] = {
         "provider": fetched.snapshot.provider,
         "latest_session": str(fetched.frame.index[-1].date()),

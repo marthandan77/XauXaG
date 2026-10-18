@@ -10,6 +10,12 @@ The app also loads Coinbase's public level-2 order book and recent trades for PA
 
 Daily order-flow features join the price history by UTC date and are passed into the same ML feature pipeline as OHLCV-derived price features. Flow features are used in model training once at least 100 completed sessions have sufficient DOM and CVD coverage. DOM completeness currently means at least 720 observed minutes in a session, so leave the collector running around the clock to build this dataset. Before enough flow history is collected, the model falls back to price-history features. Coinbase's public trades endpoint returns a rolling recent sample, so saved historical CVD builds from when the app or collector starts.
 
+## Forecast scoreboard and feedback
+
+The scoreboard compares each matured forecast with that session's actual high, low, and close. It reports close MAE and directional accuracy, full-range coverage, recent 20-forecast results, and separate low-side/high-side miss rates. A detail table shows the predicted range beside the actual range and diagnoses close over/under-prediction and which range edge missed.
+
+Each time a forecast is calculated, the app first scores any forecasts whose target sessions have completed, then retrains on the updated price history. Once there are 30 matched outcomes for the same model, horizon, and input mode, it applies a rolling 60-outcome median close-bias correction and expands range edges from observed one-sided residuals. The forecast table shows the calibration sample and adjustments used. This feedback advances when **Calculate latest forecast** is pressed or the command-line runner is run; it is not a background job while the app is idle.
+
 ## Trade plan panel
 
 The dashboard also shows a conditional trend-pullback plan. It checks the 20/50-session EMA trend, current PAXG price versus an EMA20 pullback zone, the latest trade-sample CVD ratio, 1% DOM imbalance, and the short-horizon ML direction. A setup remains **Wait** unless trend, price location, live CVD/DOM confirmation, and the ML direction do not conflict. The plan uses recent five-session swing structure for a protective stop and displays 1R and 2R targets from its EMA20 entry reference. If a stop would be wider than two ATR, the plan says to wait.
