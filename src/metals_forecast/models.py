@@ -23,6 +23,8 @@ class ModelForecast:
     predicted_high: float
     probability_up: float
     uncertainty: float
+    orderflow_rows_used: int = 0
+    orderflow_features_enabled: bool = False
 
 
 def _model(name: str, quantile: float | None = None) -> Pipeline:
@@ -64,17 +66,40 @@ def fit_individual_forecast(
     joined = features.join(targets).dropna(subset=["forward_low_return", "forward_return", "forward_high_return"])
     if len(joined) < min_rows:
         raise ValueError(f"{model_name}: need {min_rows} rows, have {len(joined)}")
-    usable_columns = [column for column in features.columns if joined[column].notna().any()]
-    x = joined[usable_columns]
+    orderflow_columns = [column for column in features.columns if column.startswith("flow_")]
+    core_flow_columns = [
+        column for column in ("flow_cvd_qty", "flow_dom_imbalance_1pct") if column in orderflow_columns
+    ]
+    orderflow_rows = (
+        int(features.loc[joined.index, core_flow_columns].notna().all(axis=1).sum())
+        if len(core_flow_columns) == 2 else 0
+    )
+    latest_has_orderflow = (
+        bool(features.iloc[[-1]][core_flow_columns].notna().all(axis=1).iloc[0])
+        if len(core_flow_columns) == 2 else False
+    )
+    # Use a clean same-session order-flow sample. Do not let thousands of older
+    # price-only rows with imputed flow values dominate this model.
+    orderflow_enabled = orderflow_rows >= max(min_rows, 100) and latest_has_orderflow
+    if orderflow_enabled:
+        flow_mask = features.loc[joined.index, core_flow_columns].notna().all(axis=1)
+        training = joined.loc[flow_mask]
+    else:
+        training = joined
+    usable_columns = [
+        column for column in features.columns
+        if training[column].notna().any() and (orderflow_enabled or not column.startswith("flow_"))
+    ]
+    x = training[usable_columns]
     latest = features.iloc[[-1]][usable_columns]
     models = {}
     close_residuals = None
     for key, target in (("low", "forward_low_return"), ("close", "forward_return"), ("high", "forward_high_return")):
         model = _model(model_name, 0.1 if key == "low" else 0.9 if key == "high" else None)
-        model.fit(x, joined[target])
+        model.fit(x, training[target])
         models[key] = float(model.predict(latest)[0])
         if key == "close":
-            close_residuals = joined[target].to_numpy(dtype=float) - model.predict(x)
+            close_residuals = training[target].to_numpy(dtype=float) - model.predict(x)
     low = max(0.01, reference_close * (1 + models["low"]))
     close = max(0.01, reference_close * (1 + models["close"]))
     high = max(0.01, reference_close * (1 + models["high"]))
@@ -84,7 +109,10 @@ def fit_individual_forecast(
     probability_up = 0.5 * (1.0 + math.erf(predicted_return / (residual_scale * math.sqrt(2.0))))
     probability_up = float(np.clip(probability_up, 0.01, 0.99))
     uncertainty = float(np.clip(residual_scale + (high - low) / max(close, 1e-6), 0.0, 1.0))
-    return ModelForecast(model_name, horizon, target_session, low, close, high, probability_up, uncertainty)
+    return ModelForecast(
+        model_name, horizon, target_session, low, close, high, probability_up, uncertainty,
+        orderflow_rows, orderflow_enabled,
+    )
 
 
 def score_forecast(forecast: dict, actual_low: float, actual_close: float, actual_high: float) -> dict[str, float | bool]:

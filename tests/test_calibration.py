@@ -1,4 +1,4 @@
-from ung_forecast.calibration import calibrate_range
+from metals_forecast.calibration import calibrate_range
 
 
 def outcome(low=-1.0, high=2.0):

@@ -44,7 +44,7 @@ class FetchedFrame:
     raw_bytes: bytes
 
 
-def validate_ohlcv(frame: pd.DataFrame, *, instrument: str = "UNG") -> pd.DataFrame:
+def validate_ohlcv(frame: pd.DataFrame, *, instrument: str = "instrument") -> pd.DataFrame:
     """Return a normalized OHLCV frame or raise; never repair silently."""
     if not isinstance(frame.index, pd.DatetimeIndex):
         raise DataValidationError(f"{instrument}: index must be DatetimeIndex")

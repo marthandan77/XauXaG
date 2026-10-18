@@ -1,6 +1,6 @@
 import pandas as pd
 
-from ung_forecast.sessions import next_sessions
+from metals_forecast.sessions import next_sessions
 
 
 def test_friday_rolls_to_monday() -> None:

@@ -55,6 +55,8 @@ class ForecastLedger:
                 "target_session": target.date().isoformat(),
                 "model_name": forecast["model_name"],
                 "horizon": forecast["horizon"],
+                "orderflow_features_enabled": bool(forecast.get("orderflow_features_enabled", False)),
+                "orderflow_rows_used": int(forecast.get("orderflow_rows_used", 0)),
                 **result,
             })
         if rows:

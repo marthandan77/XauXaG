@@ -1,7 +1,7 @@
 import pandas as pd
 
-from ung_forecast.features import build_features, build_forward_targets
-from ung_forecast.models import fit_individual_forecast, score_forecast
+from metals_forecast.features import build_features, build_forward_targets
+from metals_forecast.models import fit_individual_forecast, score_forecast
 
 
 def frame() -> pd.DataFrame:

@@ -12,6 +12,8 @@ def calibrate_range(
         row for row in outcomes
         if row.get("model_name") == forecast.get("model_name")
         and int(row.get("horizon", -1)) == int(forecast.get("horizon", -2))
+        and bool(row.get("orderflow_features_enabled", False))
+        == bool(forecast.get("orderflow_features_enabled", False))
     ]
     result = dict(forecast)
     result["calibration_sample_count"] = len(rows)

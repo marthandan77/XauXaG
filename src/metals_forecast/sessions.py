@@ -1,4 +1,4 @@
-"""US market-session helpers for UNG forecast horizons."""
+"""Market-session helpers for forecast horizons."""
 from __future__ import annotations
 
 from datetime import date

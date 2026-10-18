@@ -1,205 +1,169 @@
-"""Streamlit shell for the rolling UNG forecast system."""
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import json
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 
-from ung_forecast.ledger import ForecastLedger
-from ung_forecast.context_data import combine_context_sources, fetch_cftc_positioning, fetch_eia_storage
-from ung_forecast.metals_providers import fetch_xagusd, fetch_xauusd
-from ung_forecast.providers import compare_sources, fetch_nasdaq_ung, fetch_yahoo_ung
-from ung_forecast.rolling import generate_rolling_forecasts
-from ung_forecast.scorecards import build_scorecards
-from ung_forecast.weights import compute_model_weights
-
-st.set_page_config(page_title="UNG Forecast", page_icon="📈", layout="wide")
-st.title("UNG Rolling Forecast")
-st.caption("Daily and five-session research forecasts. Not investment advice.")
-
-run_report_path = Path("data/ledger/latest-run.json")
-if run_report_path.exists():
-    try:
-        persisted_report = json.loads(run_report_path.read_text(encoding="utf-8"))
-        st.caption(
-            f"Last scheduled run: {persisted_report.get('run_at', 'unknown')} | "
-            f"Status: {persisted_report.get('status', 'unknown')}"
-        )
-    except (OSError, json.JSONDecodeError):
-        st.warning("The latest run report exists but could not be read.")
-
-st.info("Forecasts are provisional research outputs until enough matured scorecard history exists.")
-selected_models = st.multiselect(
-    "Models to run",
-    ["ridge", "hist_gradient_boosting", "random_forest", "extra_trees"],
-    default=["ridge"],
-    help="Ridge is fastest. Tree challengers provide independent scorecards but take longer.",
+from metals_forecast.ledger import ForecastLedger
+from metals_forecast.binance_orderflow import (
+    fetch_orderflow,
+    load_daily_orderflow_features,
+    record_orderflow,
 )
-if st.button("Calculate latest forecast", type="primary", use_container_width=True):
-    with st.spinner("Fetching validated UNG data and calculating individual forecasts..."):
-        try:
-            fetched = fetch_nasdaq_ung()
-            # Nasdaq is the primary source. Yahoo is an independent health check,
-            # but rate limiting there must not prevent a valid primary forecast.
-            try:
-                confirmation = fetch_yahoo_ung()
-                agreement = compare_sources(fetched, confirmation)
-                provider_status = "CONFIRMED"
-            except Exception as yahoo_exc:
-                agreement = f"Nasdaq primary accepted; Yahoo confirmation unavailable: {yahoo_exc}"
-                provider_status = "PRIMARY ONLY"
-                st.warning(agreement)
-            context_frames = []
-            context_status = {}
-            for name, fetcher in (("EIA storage", fetch_eia_storage), ("CFTC positioning", fetch_cftc_positioning)):
-                try:
-                    context_frames.append(fetcher())
-                    context_status[name] = "AVAILABLE"
-                except Exception as context_exc:
-                    context_status[name] = f"UNAVAILABLE: {context_exc}"
-            ledger = ForecastLedger()
-            generated = generate_rolling_forecasts(
-                fetched.frame, context=combine_context_sources(context_frames),
-                model_names=selected_models or ("ridge",), ledger=ledger
-            )
-            ledger.score_matured(fetched.frame)
-            st.session_state["latest_forecasts"] = generated
-            st.session_state["latest_bars"] = fetched.frame.tail(120)
-            st.session_state["run_quality"] = {
-                "status": "READY" if len(context_frames) == 2 and provider_status == "CONFIRMED" else "PROVISIONAL",
-                "provider_status": provider_status,
-                "agreement": agreement,
-                **context_status,
-            }
-            st.success(f"Generated {len(generated)} individual model forecasts.")
-        except Exception as exc:
-            st.error(f"Forecast blocked: {type(exc).__name__}: {exc}")
+from metals_forecast.metals_providers import fetch_xagusd, fetch_xauusd
+from metals_forecast.rolling import generate_rolling_forecasts
+from metals_forecast.scorecards import build_scorecards
+from backfill_binance_history import backfill as backfill_binance_history
 
-forecasts = st.session_state.get("latest_forecasts", [])
-quality = st.session_state.get("run_quality")
-if quality:
-    st.subheader("Latest run quality")
-    q1, q2, q3 = st.columns(3)
-    q1.metric("Status", quality["status"])
-    q2.metric("UNG providers", quality.get("provider_status", "UNKNOWN"))
-    q3.metric("Context sources", f"{sum(value == 'AVAILABLE' for key, value in quality.items() if key not in ('status', 'agreement'))}/2")
-    st.caption(quality["agreement"])
-    for key, value in quality.items():
-        if key not in ("status", "agreement"):
-            st.write(f"**{key}:** {value}")
-if forecasts:
-    st.subheader("Next five trading sessions")
-    st.caption("Low and high show the model's expected trading range. Close is the expected closing price.")
-    forecast_columns = {
-        "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
-        "predicted_low": "Forecast low", "expected_close": "Forecast close",
-        "predicted_high": "Forecast high", "probability_up": "Up probability",
-    }
-    forecast_table = pd.DataFrame(forecasts)[list(forecast_columns)].rename(columns=forecast_columns)
-    forecast_table["Up probability"] = (forecast_table["Up probability"] * 100).round(0).astype(str) + "%"
-    for column in ("Forecast low", "Forecast close", "Forecast high"):
-        forecast_table[column] = forecast_table[column].round(2)
-    st.dataframe(forecast_table, use_container_width=True, hide_index=True)
-    chart_rows = {
-        row["target_session"]: {
-            "predicted_low": row["predicted_low"],
-            "expected_close": row["expected_close"],
-            "predicted_high": row["predicted_high"],
-        }
-        for row in forecasts if row["model_name"] == "ridge"
-    }
-    if chart_rows:
-        st.subheader("Forecast range graphic — Ridge")
-        st.line_chart(chart_rows, use_container_width=True)
-        st.caption("The area between Forecast low and Forecast high is the expected price range; Forecast close is the middle estimate.")
-    cards = build_scorecards(ForecastLedger().outcomes())
-    st.subheader("Individual model scorecards")
-    if cards:
-        scorecard_columns = [
-            "model_name", "horizon", "matured_forecasts", "range_coverage",
-            "mean_abs_low_error", "mean_abs_high_error", "average_range_width", "status",
-        ]
-        st.dataframe(
-            [{key: row.get(key) for key in scorecard_columns} for row in cards],
-            use_container_width=True,
-            hide_index=True,
-        )
-        st.caption("Range coverage = percentage of sessions where the actual low and high stayed inside the forecast range.")
-        st.caption("Lower low/high errors are better. Narrower ranges are better only when coverage remains high.")
-        scorecard_frame = pd.DataFrame(cards)
-        st.subheader("Range accuracy at a glance")
-        chart_frame = scorecard_frame.pivot(index="model_name", columns="horizon", values="range_coverage")
-        chart_frame.columns = [f"{int(value)}d" for value in chart_frame.columns]
-        st.bar_chart(chart_frame, y_label="Range coverage (1.0 = 100%)")
-    else:
-        st.info("No matured forecasts yet; scorecards will populate as target sessions complete.")
-    weights = compute_model_weights(ForecastLedger().outcomes())
-    if weights:
-        st.subheader("Learned model weights")
-        st.dataframe(weights, use_container_width=True, hide_index=True)
-    else:
-        st.info("Model weights remain neutral until sufficient matured out-of-sample evidence exists.")
-
-st.subheader("Planned output")
-st.write("Each run displays separate forecasts for each model and horizon; no model is hidden behind an ensemble.")
-
-st.divider()
-st.header("Gold and silver research forecasts")
-st.caption("Free public research feed: Yahoo COMEX futures proxy (GC=F/SI=F). Validate against your broker's spot feed before trading.")
-metal_models = st.multiselect(
-    "Metals models",
+st.set_page_config(page_title="Metals Forecast", page_icon="📈", layout="wide")
+st.title("Gold and Silver Rolling Forecast")
+st.caption("Five-session research forecasts and live Binance order flow. Research only.")
+st.info(
+    "Refreshes completed daily XAUUSD/XAGUSD bars from Dukascopy's public historical feed. "
+    "Live DOM and signed trade volume come from Binance XAUUSDT/XAGUSDT perpetual markets. "
+    "Both feeds are public and need no API key. Prices and order flow can differ from your broker's feed."
+)
+models = st.multiselect(
+    "Models to run",
     ["hist_gradient_boosting", "ridge", "random_forest", "extra_trees"],
     default=["hist_gradient_boosting", "ridge"],
-    key="metal_models",
-    help="HistGradientBoosting is the nonlinear champion; Ridge is the transparent benchmark.",
+    help="Each model produces its own forecast and scorecard.",
 )
-if st.button("Calculate XAUUSD and XAGUSD forecasts", type="secondary", use_container_width=True):
-    with st.spinner("Fetching gold and silver history and calculating five-session ranges..."):
-        try:
-            metal_results = {}
+
+if st.button("Calculate latest forecast", type="primary", use_container_width=True):
+    try:
+        with st.spinner("Syncing available Binance history (initial sync may take a few minutes)..."):
+            try:
+                backfill_binance_history(datetime.now(timezone.utc).date() - timedelta(days=1))
+            except Exception as exc:
+                st.warning(f"Binance archive sync failed; continuing with saved data: {type(exc).__name__}: {exc}")
+
+        with st.spinner("Refreshing current Binance CVD and market depth..."):
+            for symbol in ("XAUUSDT", "XAGUSDT"):
+                try:
+                    live_flow = fetch_orderflow(symbol)
+                    record_orderflow(live_flow)
+                except Exception as exc:
+                    st.warning(f"Could not refresh {symbol} live flow; using saved data if available: {type(exc).__name__}: {exc}")
+
+        orderflow_context = load_daily_orderflow_features()
+        with st.spinner("Refreshing Dukascopy prices, processing data, and calculating forecasts..."):
+            results = {}
             for asset, fetcher in (("xauusd", fetch_xauusd), ("xagusd", fetch_xagusd)):
                 fetched = fetcher()
-                ledger = ForecastLedger(Path("data/ledger") / asset)
+                ledger = ForecastLedger(Path("data/ledger/dukascopy") / asset)
                 rows = generate_rolling_forecasts(
-                    fetched.frame, model_names=metal_models or ("hist_gradient_boosting",),
-                    ledger=ledger, asset=asset, min_rows=100,
+                    fetched.frame,
+                    context=orderflow_context[asset] if not orderflow_context[asset].empty else None,
+                    model_names=models or ("hist_gradient_boosting",),
+                    ledger=ledger,
+                    asset=asset,
+                    min_rows=100,
                 )
                 ledger.score_matured(fetched.frame)
-                metal_results[asset] = {
+                results[asset] = {
                     "rows": rows,
                     "latest": str(fetched.frame.index[-1].date()),
                     "provider": fetched.snapshot.provider,
                     "scorecards": build_scorecards(ledger.outcomes()),
                 }
-            st.session_state["metal_results"] = metal_results
-            st.success("Gold and silver forecasts calculated.")
-        except Exception as exc:
-            st.error(f"Metals forecast blocked: {type(exc).__name__}: {exc}")
+            st.session_state["results"] = results
+        st.success("Prices and order flow refreshed; latest forecasts calculated.")
+    except Exception as exc:
+        st.error(f"Forecast blocked: {type(exc).__name__}: {exc}")
 
-metal_results = st.session_state.get("metal_results", {})
-for asset, result in metal_results.items():
+for asset, result in st.session_state.get("results", {}).items():
     st.subheader(asset.upper())
-    st.caption(f"Latest completed session: {result['latest']} | Feed: {result['provider']}")
+    st.caption(f"Latest completed session: {result['latest']} | Source: {result['provider']}")
     rows = result["rows"]
-    if not rows:
+    if rows:
+        columns = {
+            "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
+            "predicted_low": "Forecast low", "expected_close": "Forecast close",
+            "predicted_high": "Forecast high", "probability_up": "Up probability",
+            "orderflow_features_enabled": "Binance flow used",
+            "orderflow_rows_used": "Flow history days",
+        }
+        table = pd.DataFrame(rows)[list(columns)].rename(columns=columns)
+        table["Up probability"] = (table["Up probability"] * 100).round(0).astype(str) + "%"
+        for column in ("Forecast low", "Forecast close", "Forecast high"):
+            table[column] = table[column].round(2)
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.caption(
+            "Binance flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
+            "until then forecasts use price-history features."
+        )
+    else:
         st.info("No forecast rows available.")
-        continue
-    metal_table = pd.DataFrame(rows)[[
-        "target_session", "model_name", "horizon", "predicted_low", "expected_close",
-        "predicted_high", "probability_up",
-    ]].rename(columns={
-        "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",
-        "predicted_low": "Forecast low", "expected_close": "Forecast close",
-        "predicted_high": "Forecast high", "probability_up": "Up probability",
-    })
-    metal_table["Up probability"] = (metal_table["Up probability"] * 100).round(0).astype(str) + "%"
-    for column in ("Forecast low", "Forecast close", "Forecast high"):
-        metal_table[column] = metal_table[column].round(2)
-    st.dataframe(metal_table, use_container_width=True, hide_index=True)
     if result["scorecards"]:
-        st.caption("Range coverage is the percentage of completed sessions whose actual low and high stayed inside the forecast range.")
+        st.subheader("Model scorecards")
         st.dataframe(result["scorecards"], use_container_width=True, hide_index=True)
     else:
-        st.info("Metals scorecards will populate after the forecast target sessions complete.")
+        st.info("Scorecards will populate after target sessions complete.")
+
+
+st.header("Live Binance market depth and order flow")
+st.caption(
+    "Venue-specific Binance perpetual data, not a consolidated gold/silver book. CVD is calculated "
+    "from the latest 1,000 aggregate trades returned by Binance; it resets to that rolling sample "
+    "on each refresh. Quantities are contract units."
+)
+refresh_choice = st.selectbox("Refresh interval", ["Manual", "5 seconds", "15 seconds", "30 seconds"])
+refresh_interval = {"Manual": None, "5 seconds": "5s", "15 seconds": "15s", "30 seconds": "30s"}[refresh_choice]
+
+
+@st.fragment(run_every=refresh_interval)
+def show_binance_orderflow() -> None:
+    st.button("Refresh Binance DOM and CVD", key="refresh_binance_orderflow")
+    with st.spinner("Loading Binance depth and trades..."):
+        try:
+            current = {}
+            for symbol in ("XAUUSDT", "XAGUSDT"):
+                current[symbol] = fetch_orderflow(symbol)
+                record_orderflow(current[symbol])
+            st.session_state["binance_orderflow"] = current
+        except Exception as exc:
+            st.error(f"Binance data unavailable: {type(exc).__name__}: {exc}")
+            return
+
+    gold, silver = st.tabs(["Gold · XAUUSDT", "Silver · XAGUSDT"])
+    for tab, symbol in ((gold, "XAUUSDT"), (silver, "XAGUSDT")):
+        with tab:
+            data = st.session_state["binance_orderflow"][symbol]
+            best_bid = data["bids"][0]["Price"] if data["bids"] else 0
+            best_ask = data["asks"][0]["Price"] if data["asks"] else 0
+            spread = best_ask - best_bid if best_bid and best_ask else 0
+            bid_depth = sum(level["Quantity"] for level in data["bids"][:10])
+            ask_depth = sum(level["Quantity"] for level in data["asks"][:10])
+            depth_total = bid_depth + ask_depth
+            imbalance = (bid_depth - ask_depth) / depth_total * 100 if depth_total else 0
+
+            metrics = st.columns(6)
+            metrics[0].metric("Best bid", f"{best_bid:,.3f}")
+            metrics[1].metric("Best ask", f"{best_ask:,.3f}")
+            metrics[2].metric("Spread", f"{spread:,.3f}")
+            metrics[3].metric("Top 10 depth imbalance", f"{imbalance:+.1f}%")
+            metrics[4].metric(
+                "DOM imbalance · 1%", f"{data['depth_bands']['imbalance_1pct'] * 100:+.1f}%"
+            )
+            metrics[5].metric("CVD · sample", f"{data['cvd_qty']:+,.3f}")
+            metrics = st.columns(3)
+            metrics[0].metric("Aggressive buy volume", f"{data['buy_qty']:,.3f}")
+            metrics[1].metric("Aggressive sell volume", f"{data['sell_qty']:,.3f}")
+            metrics[2].metric("Traded notional · USDT", f"{data['total_quote']:,.0f}")
+            bid_col, ask_col = st.columns(2)
+            with bid_col:
+                st.markdown("**Bids**")
+                st.dataframe(pd.DataFrame(data["bids"][:20]), use_container_width=True, hide_index=True)
+            with ask_col:
+                st.markdown("**Asks**")
+                st.dataframe(pd.DataFrame(data["asks"][:20]), use_container_width=True, hide_index=True)
+            st.caption(
+                f"Read at {data['updated_at'].strftime('%Y-%m-%d %H:%M:%S UTC')} · "
+                f"CVD uses {data['trade_count']} recent aggregate trades."
+            )
+
+
+show_binance_orderflow()

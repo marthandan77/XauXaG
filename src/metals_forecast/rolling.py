@@ -16,34 +16,36 @@ from .sessions import next_sessions
 
 
 def generate_rolling_forecasts(
-    ung: pd.DataFrame,
+    prices: pd.DataFrame,
     *,
-    henry_hub: pd.Series | pd.DataFrame | None = None,
     context: pd.DataFrame | None = None,
     model_names: Iterable[str] | None = None,
     ledger: ForecastLedger | None = None,
     min_rows: int = 100,
-    asset: str = "UNG",
+    asset: str = "asset",
 ) -> list[dict]:
     """Generate one independent forecast per model and future session."""
-    ung = ung.sort_index()
+    prices = prices.sort_index()
     if model_names is None:
-        configured = os.getenv("UNG_MODELS", "ridge")
+        configured = os.getenv("FORECAST_MODELS", "ridge")
         model_names = tuple(name.strip() for name in configured.split(",") if name.strip())
-    features = build_features(ung, henry_hub, context)
-    latest_session = ung.index[-1]
+    features = build_features(prices, context=context)
+    latest_session = prices.index[-1]
     issued_at = datetime.now(timezone.utc).isoformat()
     output: list[dict] = []
     future_sessions = next_sessions(latest_session, 5)
     for horizon in (1, 2, 3, 4, 5):
         target_session = future_sessions[horizon - 1].date().isoformat()
-        targets = build_forward_targets(ung, horizon)
+        targets = build_forward_targets(prices, horizon)
         for model_name in model_names:
             forecast = fit_individual_forecast(
-                model_name, features, targets, reference_close=float(ung.iloc[-1].close),
+                model_name, features, targets, reference_close=float(prices.iloc[-1].close),
                 target_session=target_session, horizon=horizon, min_rows=min_rows,
             )
-            identity = f"{latest_session.date()}|{target_session}|{model_name}|{horizon}"
+            identity = (
+                f"{latest_session.date()}|{target_session}|{model_name}|{horizon}|"
+                f"flow:{int(forecast.orderflow_features_enabled)}"
+            )
             record = {
                 "forecast_id": asset.upper() + "-" + hashlib.sha256(identity.encode()).hexdigest()[:20],
                 "issued_at": issued_at,
@@ -51,12 +53,14 @@ def generate_rolling_forecasts(
                 "target_session": forecast.target_session,
                 "horizon": forecast.horizon,
                 "model_name": forecast.model_name,
-                "reference_close": float(ung.iloc[-1].close),
+                "reference_close": float(prices.iloc[-1].close),
                 "predicted_low": forecast.predicted_low,
                 "expected_close": forecast.expected_close,
                 "predicted_high": forecast.predicted_high,
                 "probability_up": forecast.probability_up,
                 "uncertainty": forecast.uncertainty,
+                "orderflow_rows_used": forecast.orderflow_rows_used,
+                "orderflow_features_enabled": forecast.orderflow_features_enabled,
                 "status": "PROVISIONAL",
             }
             output.append(record)

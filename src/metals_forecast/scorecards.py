@@ -7,11 +7,14 @@ from typing import Any
 
 
 def build_scorecards(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    groups: dict[tuple[str, int, bool], list[dict[str, Any]]] = defaultdict(list)
     for row in outcomes:
-        groups[(str(row["model_name"]), int(row["horizon"]))].append(row)
+        groups[(
+            str(row["model_name"]), int(row["horizon"]),
+            bool(row.get("orderflow_features_enabled", False)),
+        )].append(row)
     result = []
-    for (model_name, horizon), rows in sorted(groups.items()):
+    for (model_name, horizon, flow_enabled), rows in sorted(groups.items()):
         n = len(rows)
         def metrics(sample: list[dict[str, Any]]) -> dict[str, float]:
             count = len(sample)
@@ -26,6 +29,7 @@ def build_scorecards(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result.append({
             "model_name": model_name,
             "horizon": horizon,
+            "data_mode": "flow_enhanced" if flow_enabled else "price_only",
             "matured_forecasts": n,
             "mean_abs_close_error": all_metrics["mean_abs_close_error"],
             "mean_abs_low_error": sum(abs(float(r["low_error"])) for r in rows) / n,

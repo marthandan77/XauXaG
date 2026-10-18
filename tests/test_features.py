@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from ung_forecast.features import build_features, build_forward_targets
+from metals_forecast.features import build_features, build_forward_targets
 
 
 def prices() -> pd.DataFrame:

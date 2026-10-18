@@ -1,4 +1,4 @@
-from ung_forecast.scorecards import build_scorecards, empirical_range_calibration
+from metals_forecast.scorecards import build_scorecards, empirical_range_calibration
 
 
 def outcomes(n=30):

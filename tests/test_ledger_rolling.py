@@ -1,7 +1,7 @@
 import pandas as pd
 
-from ung_forecast.ledger import ForecastLedger
-from ung_forecast.rolling import generate_rolling_forecasts
+from metals_forecast.ledger import ForecastLedger
+from metals_forecast.rolling import generate_rolling_forecasts
 
 
 def prices(n: int = 220) -> pd.DataFrame:

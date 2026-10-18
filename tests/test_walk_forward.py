@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from ung_forecast.features import build_features, build_forward_targets
-from ung_forecast.models import walk_forward_evaluate
+from metals_forecast.features import build_features, build_forward_targets
+from metals_forecast.models import walk_forward_evaluate
 
 
 def prices(n=180):

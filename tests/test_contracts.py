@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from ung_forecast.contracts import DataValidationError, validate_ohlcv
+from metals_forecast.contracts import DataValidationError, validate_ohlcv
 
 
 def valid_frame() -> pd.DataFrame:

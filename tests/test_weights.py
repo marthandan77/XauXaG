@@ -1,4 +1,4 @@
-from ung_forecast.weights import compute_model_weights
+from metals_forecast.weights import compute_model_weights
 
 
 def rows(model, error, n=20):

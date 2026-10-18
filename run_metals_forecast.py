@@ -1,24 +1,28 @@
-"""Run daily five-session XAUUSD/XAGUSD proxy research forecasts."""
+"""Refresh Dukascopy and run daily five-session metals forecasts."""
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ung_forecast.ledger import ForecastLedger
-from ung_forecast.metals_providers import fetch_xagusd, fetch_xauusd
-from ung_forecast.rolling import generate_rolling_forecasts
+from metals_forecast.binance_orderflow import load_daily_orderflow_features
+from metals_forecast.ledger import ForecastLedger
+from metals_forecast.metals_providers import fetch_xagusd, fetch_xauusd
+from metals_forecast.rolling import generate_rolling_forecasts
 
 
 def main() -> None:
     report: dict = {"run_at": datetime.now(timezone.utc).isoformat(), "assets": {}}
+    orderflow_context = load_daily_orderflow_features()
     for asset, fetcher in (("xauusd", fetch_xauusd), ("xagusd", fetch_xagusd)):
         fetched = fetcher()
-        ledger = ForecastLedger(Path("data/ledger") / asset)
+        ledger = ForecastLedger(Path("data/ledger/dukascopy") / asset)
         # Daily default: champion + transparent benchmark. The heavier tree
         # challengers remain available from Streamlit for periodic audits.
         rows = generate_rolling_forecasts(
-            fetched.frame, model_names=("hist_gradient_boosting", "ridge"),
+            fetched.frame,
+            context=orderflow_context[asset] if not orderflow_context[asset].empty else None,
+            model_names=("hist_gradient_boosting", "ridge"),
             ledger=ledger, asset=asset, min_rows=100,
         )
         scored = ledger.score_matured(fetched.frame)
