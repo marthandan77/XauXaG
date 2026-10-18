@@ -1,4 +1,4 @@
-"""Public OKX metals perpetual depth and aggregate trade data."""
+"""Public Coinbase PAXG/USD depth and trade data."""
 from __future__ import annotations
 
 import hashlib
@@ -13,41 +13,38 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 
-BASE_URL = "https://www.okx.com"
-SYMBOLS = {"XAUUSDT": "Gold", "XAGUSDT": "Silver"}
-INSTRUMENTS = {"XAUUSDT": "XAU-USDT-SWAP", "XAGUSDT": "XAG-USDT-SWAP"}
-DEFAULT_DB = Path("data/okx/orderflow.sqlite3")
+BASE_URL = "https://api.exchange.coinbase.com"
+SYMBOLS = {"XAUUSD": "Gold (PAXG/USD proxy)"}
+INSTRUMENTS = {"XAUUSD": "PAXG-USD"}
+DEFAULT_DB = Path("data/coinbase/orderflow.sqlite3")
 
 
 def _get(path: str, params: dict[str, str | int]) -> list | dict:
-    url = f"{BASE_URL}{path}?{urlencode(params)}"
+    query = urlencode(params)
+    url = f"{BASE_URL}{path}" + (f"?{query}" if query else "")
     request = Request(url, headers={"User-Agent": "MetalsForecast/0.1", "Accept": "application/json"})
     try:
         with urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"OKX market data request failed: {exc}") from exc
-    if isinstance(payload, dict) and "code" in payload and payload.get("code", "0") != "0":
-        raise RuntimeError(f"OKX API error {payload['code']}: {payload.get('msg', 'unknown error')}")
+        raise RuntimeError(f"Coinbase Exchange public market data request failed: {exc}") from exc
     return payload
 
 
-def fetch_orderflow(symbol: str, depth_limit: int = 400, trade_limit: int = 500) -> dict:
-    """Fetch one public OKX order book snapshot and recent trades."""
+def fetch_orderflow(symbol: str) -> dict:
+    """Fetch a public Coinbase PAXG/USD book and recent trades."""
     key = symbol.upper()
     if key not in SYMBOLS:
-        raise ValueError(f"Unsupported OKX metals symbol: {symbol}")
-    instrument = INSTRUMENTS[key]
-    depth_payload = _get("/api/v5/market/books", {"instId": instrument, "sz": depth_limit})
-    trade_payload = _get("/api/v5/market/trades", {"instId": instrument, "limit": trade_limit})
-    depth_rows = depth_payload.get("data") if isinstance(depth_payload, dict) else None
-    trades = trade_payload.get("data") if isinstance(trade_payload, dict) else None
-    depth = depth_rows[0] if isinstance(depth_rows, list) and depth_rows else None
-    if not isinstance(depth, dict) or not isinstance(trades, list):
-        raise RuntimeError(f"Unexpected OKX response for {instrument}")
+        raise ValueError(f"Unsupported Coinbase metals symbol: {symbol}")
+    product = INSTRUMENTS[key]
+    depth_payload = _get(f"/products/{product}/book", {"level": 2})
+    trade_payload = _get(f"/products/{product}/trades", {})
+    trades = trade_payload if isinstance(trade_payload, list) else None
+    if not isinstance(depth_payload, dict) or not isinstance(trades, list):
+        raise RuntimeError(f"Unexpected Coinbase response for {product}")
 
-    bids = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth["bids"]]
-    asks = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth["asks"]]
+    bids = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth_payload["bids"]]
+    asks = [{"Price": float(level[0]), "Quantity": float(level[1])} for level in depth_payload["asks"]]
     best_bid = bids[0]["Price"] if bids else 0.0
     best_ask = asks[0]["Price"] if asks else 0.0
     mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0.0
@@ -63,8 +60,8 @@ def fetch_orderflow(symbol: str, depth_limit: int = 400, trade_limit: int = 500)
     buy_qty = sell_qty = buy_quote = sell_quote = 0.0
     normalized_trades = []
     for trade in trades:
-        quantity = float(trade["sz"])
-        price = float(trade["px"])
+        quantity = float(trade["size"])
+        price = float(trade["price"])
         quote = price * quantity
         sell_aggressor = trade["side"].lower() == "sell"
         if sell_aggressor:
@@ -73,11 +70,11 @@ def fetch_orderflow(symbol: str, depth_limit: int = 400, trade_limit: int = 500)
         else:
             buy_qty += quantity
             buy_quote += quote
-        trade_key = str(trade.get("tradeId") or f"{trade['ts']}:{trade['px']}:{trade['sz']}:{trade['side']}")
+        trade_key = str(trade.get("trade_id") or f"{trade['time']}:{trade['price']}:{trade['size']}:{trade['side']}")
         digest = hashlib.blake2b(trade_key.encode("utf-8"), digest_size=8).digest()
         normalized_trades.append({
             "id": int.from_bytes(digest, "big") & ((1 << 63) - 1),
-            "timestamp": int(trade["ts"]),
+            "timestamp": int(datetime.fromisoformat(trade["time"].replace("Z", "+00:00")).timestamp() * 1000),
             "price": price,
             "quantity": quantity,
             "buyer_is_maker": sell_aggressor,
@@ -86,7 +83,7 @@ def fetch_orderflow(symbol: str, depth_limit: int = 400, trade_limit: int = 500)
     return {
         "symbol": key,
         "name": SYMBOLS[key],
-        "source": "OKX",
+        "source": "Coinbase Exchange",
         "bids": bids,
         "asks": asks,
         "depth_bands": band_depths,
@@ -296,7 +293,7 @@ def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str,
         depth = read_table(connection, "depth_snapshots")
         live_features = read_table(connection, "live_daily_features")
     result = {}
-    for symbol, asset in (("XAUUSDT", "xauusd"), ("XAGUSDT", "xagusd")):
+    for symbol, asset in (("XAUUSD", "xauusd"), ("XAGUSD", "xagusd")):
         symbol_live = live_features.loc[live_features["symbol"] == symbol].copy() if not live_features.empty else pd.DataFrame()
         symbol_trades = trades.loc[trades["symbol"] == symbol].copy() if not trades.empty else pd.DataFrame()
         if not symbol_live.empty:

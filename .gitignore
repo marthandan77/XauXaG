@@ -6,5 +6,5 @@ __pycache__/
 data/raw/
 data/normalized/
 data/dukascopy/
-data/okx/
+data/coinbase/
 .streamlit/secrets.toml

@@ -1,4 +1,4 @@
-"""Continuously archive public OKX metals trades and depth snapshots."""
+"""Continuously archive public Coinbase Exchange metals trades and depth snapshots."""
 from __future__ import annotations
 
 import argparse
@@ -14,10 +14,10 @@ def main() -> None:
     if args.interval < 5:
         parser.error("--interval must be at least five seconds to stay within public API rate limits")
 
-    print("Collecting public OKX XAUUSDT and XAGUSDT flow data. Press Ctrl+C to stop.")
+    print("Collecting public Coinbase Exchange PAXG-USD flow data. Press Ctrl+C to stop.")
     while True:
         started = time.monotonic()
-        for symbol in ("XAUUSDT", "XAGUSDT"):
+        for symbol in ("XAUUSD",):
             try:
                 data = fetch_orderflow(symbol)
                 record_orderflow(data)
