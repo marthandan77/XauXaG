@@ -32,7 +32,7 @@ def fetch_dukascopy_metal(asset: str) -> FetchedFrame:
     symbol = SYMBOLS[key]
     try:
         try:
-            cached = downloader.load(symbol, "d1", drop_flat=True)
+            cached = downloader.load(symbol, "d1")
         except Exception:
             cached = pd.DataFrame()
         has_history = len(cached) >= 500
@@ -41,7 +41,7 @@ def fetch_dukascopy_metal(asset: str) -> FetchedFrame:
         failures = [error for result in results for _, error in result.errors]
         if failures:
             raise RuntimeError("; ".join(failures))
-        frame = downloader.load(symbol, "d1", drop_flat=True)
+        frame = downloader.load(symbol, "d1")
     except Exception as exc:
         raise DataValidationError(f"Dukascopy {key} history download failed: {exc}") from exc
     finally:
@@ -59,6 +59,13 @@ def fetch_dukascopy_metal(asset: str) -> FetchedFrame:
         frame.index = pd.to_datetime(frame.index, utc=True, errors="coerce")
     frame.index = pd.to_datetime(frame.index, utc=True).tz_convert(None).normalize()
     frame = frame[["open", "high", "low", "close", "volume"]]
+    flat_zero_volume = (
+        frame["open"].eq(frame["high"])
+        & frame["open"].eq(frame["low"])
+        & frame["open"].eq(frame["close"])
+        & frame["volume"].eq(0)
+    )
+    frame = frame.loc[~flat_zero_volume]
     frame = validate_ohlcv(frame, instrument=key)
 
     today = datetime.now(timezone.utc).date()
