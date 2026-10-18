@@ -5,14 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "metals-forecast"
 version = "0.1.0"
-description = "Point-in-time rolling range forecasts for gold and silver"
+description = "Point-in-time rolling range forecasts for Coinbase PAXG/USD"
 requires-python = ">=3.12"
 dependencies = [
   "numpy>=1.26,<3",
   "pandas>=2.2,<4",
   "scikit-learn>=1.5,<2",
   "streamlit>=1.40,<2",
-  "dukascopy-downloader==1.1.0",
 ]
 
 [project.optional-dependencies]

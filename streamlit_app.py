@@ -11,17 +11,17 @@ from metals_forecast.orderflow import (
     load_daily_orderflow_features,
     record_orderflow,
 )
-from metals_forecast.metals_providers import fetch_xagusd, fetch_xauusd
+from metals_forecast.coinbase_provider import fetch_paxg_daily
 from metals_forecast.rolling import generate_rolling_forecasts
 from metals_forecast.scorecards import build_scorecards
 
 st.set_page_config(page_title="Metals Forecast", layout="wide")
-st.title("Gold and Silver Rolling Forecast")
-st.caption("Five-session research forecasts and live Coinbase order flow. Research only.")
+st.title("Gold (PAXG/USD) Rolling Forecast")
+st.caption("Five-session research forecasts using Coinbase PAXG/USD prices and order flow. Research only.")
 st.info(
-    "Refreshes completed daily XAUUSD/XAGUSD bars from Dukascopy's public historical feed. "
-    "Live DOM and signed trade volume come from Coinbase PAXG-USD market (gold-backed token proxy). "
-    "Both feeds are public and need no API key. Prices and order flow can differ from your broker's feed."
+    "Uses Coinbase's public PAXG-USD daily candles, level-2 book, and recent trades. "
+    "PAXG is a gold-backed token proxy, not spot XAUUSD or your broker's feed. "
+    "Coinbase is public and needs no API key. This dashboard forecasts gold only."
 )
 models = st.multiselect(
     "Models to run",
@@ -41,33 +41,34 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
                     st.warning(f"Could not refresh {symbol} live flow; using saved data if available: {type(exc).__name__}: {exc}")
 
         orderflow_context = load_daily_orderflow_features()
-        with st.spinner("Refreshing Dukascopy prices, processing data, and calculating forecasts..."):
-            results = {}
-            for asset, fetcher in (("xauusd", fetch_xauusd), ("xagusd", fetch_xagusd)):
-                fetched = fetcher()
-                ledger = ForecastLedger(Path("data/ledger/dukascopy") / asset)
-                rows = generate_rolling_forecasts(
-                    fetched.frame,
-                    context=orderflow_context[asset] if not orderflow_context[asset].empty else None,
-                    model_names=models or ("hist_gradient_boosting",),
-                    ledger=ledger,
-                    asset=asset,
-                    min_rows=100,
-                )
-                ledger.score_matured(fetched.frame)
-                results[asset] = {
+        with st.spinner("Refreshing Coinbase PAXG/USD prices, processing data, and calculating forecasts..."):
+            fetched = fetch_paxg_daily()
+            asset = "xauusd"
+            ledger = ForecastLedger(Path("data/ledger/coinbase") / asset)
+            flow = orderflow_context.get(asset, pd.DataFrame())
+            rows = generate_rolling_forecasts(
+                fetched.frame,
+                context=flow if not flow.empty else None,
+                model_names=models or ("hist_gradient_boosting",),
+                ledger=ledger,
+                asset=asset,
+                min_rows=100,
+            )
+            ledger.score_matured(fetched.frame)
+            st.session_state["results"] = {
+                asset: {
                     "rows": rows,
                     "latest": str(fetched.frame.index[-1].date()),
                     "provider": fetched.snapshot.provider,
                     "scorecards": build_scorecards(ledger.outcomes()),
                 }
-            st.session_state["results"] = results
+            }
         st.success("Forecasts calculated; live order flow refreshed when available.")
     except Exception as exc:
         st.error(f"Forecast blocked: {type(exc).__name__}: {exc}")
 
 for asset, result in st.session_state.get("results", {}).items():
-    st.subheader(asset.upper())
+    st.subheader("Gold | PAXG/USD proxy")
     st.caption(f"Latest completed session: {result['latest']} | Source: {result['provider']}")
     rows = result["rows"]
     if rows:
@@ -84,8 +85,8 @@ for asset, result in st.session_state.get("results", {}).items():
             table[column] = table[column].round(2)
         st.dataframe(table, use_container_width=True, hide_index=True)
         st.caption(
-            "Coinbase flow features enter training only after at least 100 completed sessions contain both CVD and DOM; "
-            "until then forecasts use price-history features."
+            "Coinbase CVD and DOM features enter training after at least 100 completed sessions contain "
+            "both signals; until then, forecasts use PAXG price-history features."
         )
     else:
         st.info("No forecast rows available.")

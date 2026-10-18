@@ -290,10 +290,10 @@ def record_orderflow(data: dict, db_path: str | Path = DEFAULT_DB) -> None:
 
 
 def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str, pd.DataFrame]:
-    """Return UTC-day CVD/trade and DOM summary features for both metals."""
+    """Return UTC-day CVD/trade and DOM summary features for the PAXG gold proxy."""
     path = Path(db_path)
     if not path.exists():
-        return {asset: pd.DataFrame() for asset in ("xauusd", "xagusd")}
+        return {"xauusd": pd.DataFrame()}
 
     def read_table(connection: sqlite3.Connection, table: str) -> pd.DataFrame:
         try:
@@ -306,7 +306,7 @@ def load_daily_orderflow_features(db_path: str | Path = DEFAULT_DB) -> dict[str,
         depth = read_table(connection, "depth_snapshots")
         live_features = read_table(connection, "live_daily_features")
     result = {}
-    for symbol, asset in (("XAUUSD", "xauusd"), ("XAGUSD", "xagusd")):
+    for symbol, asset in (("XAUUSD", "xauusd"),):
         symbol_live = live_features.loc[live_features["symbol"] == symbol].copy() if not live_features.empty else pd.DataFrame()
         symbol_trades = trades.loc[trades["symbol"] == symbol].copy() if not trades.empty else pd.DataFrame()
         if not symbol_live.empty:
