@@ -133,6 +133,19 @@ def record_orderflow(data: dict, db_path: str | Path = DEFAULT_DB) -> None:
     trade_ids = [int(trade["id"]) for trade in data["trades"]]
     existing_ids: set[int] = set()
     with sqlite3.connect(path) as connection:
+        # This is the first database access on a fresh install. Create the
+        # table before querying it; the complete schema is initialized below.
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS aggregate_trades (
+                symbol TEXT NOT NULL,
+                trade_id INTEGER NOT NULL,
+                trade_time_ms INTEGER NOT NULL,
+                price REAL NOT NULL,
+                quantity REAL NOT NULL,
+                buyer_is_maker INTEGER NOT NULL,
+                PRIMARY KEY (symbol, trade_id)
+            )
+        """)
         for offset in range(0, len(trade_ids), 500):
             batch = trade_ids[offset:offset + 500]
             if not batch:
