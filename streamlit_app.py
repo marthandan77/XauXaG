@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from metals_forecast.ledger import ForecastLedger
+from metals_forecast.strategy import build_trade_plan
 from metals_forecast.orderflow import (
     fetch_orderflow,
     load_daily_orderflow_features,
@@ -15,7 +16,7 @@ from metals_forecast.coinbase_provider import fetch_paxg_daily
 from metals_forecast.rolling import generate_rolling_forecasts
 from metals_forecast.scorecards import build_scorecards
 
-st.set_page_config(page_title="Metals Forecast", layout="wide")
+st.set_page_config(page_title="PAXG Gold Forecast", layout="wide")
 st.title("Gold (PAXG/USD) Rolling Forecast")
 st.caption("Five-session research forecasts using Coinbase PAXG/USD prices and order flow. Research only.")
 st.info(
@@ -32,13 +33,16 @@ models = st.multiselect(
 
 if st.button("Calculate latest forecast", type="primary", use_container_width=True):
     try:
+        current_flow = None
         with st.spinner("Refreshing current Coinbase CVD and market depth..."):
             for symbol in ("XAUUSD",):
                 try:
-                    live_flow = fetch_orderflow(symbol)
-                    record_orderflow(live_flow)
+                    current_flow = fetch_orderflow(symbol)
+                    record_orderflow(current_flow)
+                    st.session_state["latest_strategy_flow"] = current_flow
                 except Exception as exc:
                     st.warning(f"Could not refresh {symbol} live flow; using saved data if available: {type(exc).__name__}: {exc}")
+                    current_flow = st.session_state.get("coinbase_orderflow", {}).get(symbol)
 
         orderflow_context = load_daily_orderflow_features()
         with st.spinner("Refreshing Coinbase PAXG/USD prices, processing data, and calculating forecasts..."):
@@ -54,6 +58,7 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
                 asset=asset,
                 min_rows=100,
             )
+            trade_plan = build_trade_plan(fetched.frame, current_flow, rows)
             ledger.score_matured(fetched.frame)
             st.session_state["results"] = {
                 asset: {
@@ -61,6 +66,7 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
                     "latest": str(fetched.frame.index[-1].date()),
                     "provider": fetched.snapshot.provider,
                     "scorecards": build_scorecards(ledger.outcomes()),
+                    "trade_plan": trade_plan,
                 }
             }
         st.success("Forecasts calculated; live order flow refreshed when available.")
@@ -70,6 +76,35 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
 for asset, result in st.session_state.get("results", {}).items():
     st.subheader("Gold | PAXG/USD proxy")
     st.caption(f"Latest completed session: {result['latest']} | Source: {result['provider']}")
+    plan = result.get("trade_plan")
+    if plan:
+        st.subheader("Simple trade plan")
+        st.caption(
+            "Daily trend-pullback setup using Coinbase PAXG/USD. Levels are proxy prices, not your broker's "
+            "XAUUSD quotes; verify the equivalent level on your trading platform before acting."
+        )
+        if plan["setup"].startswith("Conditional"):
+            st.success(plan["setup"])
+        elif plan["setup"].startswith("Wait"):
+            st.warning(plan["setup"])
+        status = st.columns(3)
+        status[0].metric("Trend bias", plan["bias"])
+        status[1].metric("Live CVD + DOM", plan["flow_state"])
+        status[2].metric("Short-horizon ML", plan["model_bias"])
+        if plan["entry_low"] is not None:
+            levels = st.columns(5)
+            levels[0].metric(
+                "Entry zone", f"{plan['entry_low']:,.2f} – {plan['entry_high']:,.2f}"
+            )
+            levels[1].metric("Protective stop", f"{plan['stop']:,.2f}")
+            levels[2].metric("Target 1 | 1R", f"{plan['target_1']:,.2f}")
+            levels[3].metric("Target 2 | 2R", f"{plan['target_2']:,.2f}")
+            levels[4].metric("Risk from entry ref.", f"${plan['risk_per_unit']:,.2f} / PAXG")
+        st.markdown("**Why:** " + " ".join(plan["reasons"]))
+        st.caption(
+            "Targets are 1R and 2R from the 20-session EMA entry reference. Set position size from your "
+            "account risk and stop distance; wait for price to hold the zone with flow confirmation."
+        )
     rows = result["rows"]
     if rows:
         columns = {
