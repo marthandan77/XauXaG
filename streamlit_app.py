@@ -31,6 +31,9 @@ models = st.multiselect(
     help="Each model produces its own forecast and scorecard.",
 )
 
+if "results" not in st.session_state:
+    st.info("Select Calculate latest forecast to generate the next trading session's predicted low, close, and high.")
+
 if st.button("Calculate latest forecast", type="primary", use_container_width=True):
     try:
         current_flow = None
@@ -79,6 +82,20 @@ if st.button("Calculate latest forecast", type="primary", use_container_width=Tr
 for asset, result in st.session_state.get("results", {}).items():
     st.subheader("Gold | PAXG/USD proxy")
     st.caption(f"Latest completed session: {result['latest']} | Source: {result['provider']}")
+    rows = result["rows"]
+    daily_rows = [row for row in rows if int(row["horizon"]) == 1]
+    st.subheader("Next trading session price range")
+    if daily_rows:
+        st.caption(f"Forecast for {daily_rows[0]['target_session']} · PAXG/USD proxy prices")
+        daily_columns = st.columns(len(daily_rows))
+        for column, forecast in zip(daily_columns, daily_rows):
+            column.metric(
+                f"{forecast['model_name']} predicted low–high",
+                f"${forecast['predicted_low']:,.2f} – ${forecast['predicted_high']:,.2f}",
+            )
+            column.caption(f"Expected close: ${forecast['expected_close']:,.2f}")
+    else:
+        st.info("No one-session forecasts were returned. Recalculate to try again.")
     plan = result.get("trade_plan")
     if plan:
         st.subheader("Simple trade plan")
@@ -108,7 +125,6 @@ for asset, result in st.session_state.get("results", {}).items():
             "Targets are 1R and 2R from the 20-session EMA entry reference. Set position size from your "
             "account risk and stop distance; wait for price to hold the zone with flow confirmation."
         )
-    rows = result["rows"]
     if rows:
         columns = {
             "target_session": "Session", "model_name": "Model", "horizon": "Days ahead",

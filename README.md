@@ -31,7 +31,7 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-Press **Calculate latest forecast** to refresh live Coinbase trades and DOM, save available flow data, download PAXG-USD candles, load the archived flow features, and calculate the latest model forecasts. Live DOM/CVD can also refresh independently. No account or API key is needed.
+Press **Calculate latest forecast** to refresh live Coinbase trades and DOM, save available flow data, download PAXG-USD candles, load the archived flow features, and calculate the latest model forecasts. The next trading session's predicted low-to-high range and expected close appear near the top of the results, with one range per selected model. Live DOM/CVD can also refresh independently. No account or API key is needed.
 
 To run the daily HistGradientBoosting and Ridge forecasts from a terminal:
 
